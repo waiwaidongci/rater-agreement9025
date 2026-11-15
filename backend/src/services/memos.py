@@ -1,14 +1,21 @@
 from sqlalchemy import select
 from fastapi import HTTPException
-from src.models import AgreementRun,ReviewMemo
+from src.models import AgreementRun,AlternativesRun,ReviewMemo
 from src.utils.serialize import row
 from .audit import record
 
 def create_memo(db,data,actor):
- run=db.get(AgreementRun,data.run_id)
- if not run or run.status!='completed':raise HTTPException(422,'仅成功运行可建立口径复核说明')
+ if data.run_id is not None:
+  run=db.get(AgreementRun,data.run_id)
+  if not run or run.status!='completed':raise HTTPException(422,'仅成功的确定票运行可建立口径复核说明')
+  snapshot=run.result
+ elif data.alternatives_run_id is not None:
+  run=db.get(AlternativesRun,data.alternatives_run_id)
+  if not run or run.status!='completed':raise HTTPException(422,'仅成功的备选票运行可建立口径复核说明')
+  snapshot=run.result
+ else:raise HTTPException(422,'说明须关联一个完成运行')
  if db.scalar(select(ReviewMemo).where(ReviewMemo.name==data.name)):raise HTTPException(409,'说明名已存在')
- memo=ReviewMemo(**data.model_dump(),result_snapshot=run.result,created_by=actor);db.add(memo);db.commit();record(db,actor,'memo.created',{'memo_id':memo.id});return row(memo)
+ memo=ReviewMemo(**data.model_dump(),result_snapshot=snapshot,created_by=actor);db.add(memo);db.commit();record(db,actor,'memo.created',{'memo_id':memo.id,'run_id':data.run_id,'alternatives_run_id':data.alternatives_run_id});return row(memo)
 
 def approve_memo(db,id,data,actor):
  memo=db.scalar(select(ReviewMemo).where(ReviewMemo.id==id).with_for_update())

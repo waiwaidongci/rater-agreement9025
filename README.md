@@ -20,9 +20,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 |账号 / 密码|权限与主要页面|典型动作|
 |---|---|---|
-|admin@shanxu.demo / Shanxu2026!|六页、写入与审阅|批准或退回分类口径复核|
-|analyst@shanxu.demo / Shanxu2026!|六页、导入/改票/运行/说明|修订逐票、排队；审批403|
-|viewer@shanxu.demo / Shanxu2026!|六页只读、批准CSV|阅读逐票与结果、下载快照；写入403|
+|admin@shanxu.demo / Shanxu2026!|七页、写入与审阅|批准或退回分类口径复核|
+|analyst@shanxu.demo / Shanxu2026!|七页、导入/改票/运行/说明|修订逐票、声明备选集合、排队；审批403|
+|viewer@shanxu.demo / Shanxu2026!|七页只读、批准CSV|阅读逐票与结果、核对端点方案、下载快照；写入403|
 
 首次启动自动seed，手动独立执行也幂等，不覆盖用户改票、试样说明和复核意见。`.env.example`含三个端口、MYSQL_DATABASE/USER/PASSWORD/ROOT_PASSWORD、JWT_SECRET、SEED_DEMO、RATE_LIMIT_WRITES默认60。演示密码和JWT secret仅用于本地，部署须设置自己的值。
 
@@ -37,8 +37,9 @@ Compose恰好frontend/backend/worker/db/redis五服务，均有健康检查。Ng
 5. A研究实际N120/360票，Pbar=0.7083333333、Pe=0.2511265432、κ=0.6105260989。类别总票97/95/84/84，一起解释机会基线。
 6. 读400有效/0退化重复和经验percentile区间[0.5296296698,0.6836294491]，可展开每次抽取行索引、κ与失败理由。它只在固定面板与iid试样条件下解释。
 7. 对照“单类边界评议”：全部票同类时Pe=1、κ未定义，worker会失败，不把它标成κ1。全一致但有多类时κ可以1。
-8. 在“口径复核”写争议试样的类别边界与独立复核行动，保持原三位标记者。说明冻结整份统计与bootstrap快照。
-9. 负责人纪岚批准/退回；观察员陶野下载批准CSV（κ、Pbar、Pe、有效/退化数、区间、逐试样P和计数）。重复审批409，后续改票不改写已有快照；过程留痕核对全部动作。
+8. 若某些票只能确定几个备选岩相，在“备选票边界”为这些票保留原票并勾选候选集合；精确分析给出全部合法方案中有定义κ的最小/最大值、两端逐票方案和κ未定义方案数。它不是抽样区间。
+9. 在“口径复核”写争议试样的类别边界与独立复核行动，保持原三位标记者。说明冻结整份统计与bootstrap快照（或备选票两端方案快照）。
+10. 负责人纪岚批准/退回；观察员陶野下载批准CSV（κ、Pbar、Pe、有效/退化数、区间、逐试样P和计数）。重复审批409，后续改票不改写已有快照；过程留痕核对全部动作。
 
 ## Fleiss κ与整行bootstrap口径
 
@@ -58,15 +59,33 @@ Bootstrap固定seed，B400–1000次；每次有放回抽N个完整计数行，�
 
 MySQL的κ/Pbar/Pe列均用DOUBLE(asdecimal=False)，保持Python float，避免默认Decimal十位小数转换损失；API逐项与JSON结果比到1e-15并查询实际列类型。
 
+## 备选票精确边界（不是抽样区间）
+
+部分票只能确定几个备选岩相。系统为此提供独立的“备选票边界”分析：原票 `category` 始终保留，另在该票上声明候选集合 `alternatives`（至少2个、至多类别数、均来自预先声明类别、必须包含原票）。确定票分析完全不受影响——它仍只读原票类别，指纹也不含备选集合，声明或修订候选不会改动既有确定票运行。
+
+对固定N、r=3、类别总票数Tⱼ，令
+
+`S = ΣᵢΣⱼ nᵢⱼ(nᵢⱼ−1)`，`T = Σⱼ(类别j总票数)²`，`κ = (3NS − 2T) / [2((3N)² − T)]`
+
+T只取决于各类别总票数；对每个可达的总数向量只需S的最小/最大值。因此按每个受影响试样“候选票落入各类别的个数”做精确动态规划，隐式覆盖全部合法定类方案，用整数计数与`Fraction`求出**有定义κ的精确最小值与最大值**。全程无抽样、无重采样、无近似。两端各保存一套完整逐票方案（全部试样、全部票的最终类别、原票类别、候选集合、每项Pᵢ、S、T、精确有理数κ），保存时逐票回算并与动态规划结果逐位比对，不一致即拒绝输出。
+
+全票同类的方案Pe=1、κ未定义。系统统计这类合法方案（等价于“存在一个各类别都可取的类别，且全部确定票都是该类”），从最小/最大值中排除，并明确报告`undefined_schemes`：是否存在、数量、具体类别。若不存在有定义方案，则明确说明。合法方案总数保留为十进制字符串。
+
+规模守卫：状态数上限400,000（组合数C(A+C,C)），状态转移上界3,000,000，父指针内存上界96MB，并预估基线RSS；运行中每65536次转移复查25秒时限与256MB驻留上限。任一项超限即抛出拒绝并记录原因到审计，**不返回近似值**。题设的240试样/3类/48张3选1备选票只需20,825个状态、58,800次转移、约0.06秒与21MB峰值RSS。
+
+页面“备选票边界”可预检规模、排队运行、查看两端方案，并录入任意完整逐票方案做独立回算（`POST /alternatives-runs/{id}/verify`）：确定票必须保持原票、备选票必须在候选集合内、必须覆盖全部票，否则422。端点方案回算结果与存储端点逐位比对。端点回算可记入审计，复核说明可关联备选票运行并冻结两端快照，批准导出CSV含两端逐票选择与原票对照。
+
+`backend/tests/check_alternatives.py`对小例穷举全部方案逐位核对最小/最大值、未定义方案数与两端的可行性，并跑满规模240×3×48备选票与拒绝路径；`backend/tests/check_http_alternatives.py`走真实FastAPI路由验证权限、端点回算、篡改拒绝、说明审批与CSV导出。两者均不依赖第三方测试框架。
+
 ## 结构与校验
 
-77个有职责的Python/TS/Vue/CSS源文件（不计空包、依赖和dist）。五实体AgreementStudy → Specimen → RaterVote → AgreementRun → ReviewMemo贯穿ORM/schema/service/routes、前端API/store和六页：评议总览、试样与逐票、固定面板配置、κ与重采样、口径复核、过程留痕。
+80个有职责的Python/TS/Vue/CSS源文件（不计空包、依赖和dist）。六实体AgreementStudy → Specimen → RaterVote → AgreementRun / AlternativesRun → ReviewMemo贯穿ORM/schema/service/routes、前端API/store和七页：评议总览、试样与逐票、固定面板配置、κ与重采样、备选票边界、口径复核、过程留痕。
 
 前端 `src/{api,stores,types,components/common,hooks,pages,router,utils,constants}`；后端 `src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}`，另scripts/seed_demo.py与migrations/。VoteMatrix、AgreementSummary、CategoryMargins、RunList多页复用，BootstrapStrip展示后端实际频数和经验区间；useTask/useRoute和format工具处理交互。
 
 角色Role、运行RunStatus、审阅MemoStatus位于 `backend/src/constants/enums.py`，前端对应 `frontend/src/constants/enums.ts`。JWT授权、审计、RequestID/Error/Redis写限流三个中间件形成横切链路。配额按令牌摘要或无令牌IP与分钟计数，默认60写请求、超限429含Retry-After；计数服务不可用503，健康GET不计。审批行锁限制draft只能审一次，批准导出取result_snapshot。
 
-2–240试样、声明2–6唯一类别、固定3位唯一标记者；每试样同一面板各一票。重复试样、重复人、缺票、未知类别和非法B/seed拒绝；安全422不回显NaN等非法input。全单类数据可存底稿，但κ计算明确失败，不伪造结果。指纹按试样编号/票键排序，行序稳定，对票、试样说明、类别/面板顺序和参数敏感。
+2–240试样、声明2–6唯一类别、固定3位唯一标记者；每试样同一面板各一票。备选票须2..类别数个唯一候选且包含原票，否则422。重复试样、重复人、缺票、未知类别和非法B/seed拒绝；安全422不回显NaN等非法input。全单类数据可存底稿，但κ计算明确失败，不伪造结果。指纹按试样编号/票键排序，行序稳定，对票、试样说明、类别/面板顺序和参数敏感。
 
 |层|技术|
 |---|---|
@@ -77,4 +96,4 @@ MySQL的κ/Pbar/Pe列均用DOUBLE(asdecimal=False)，保持Python float，避免
 
 本地前端 `cd frontend && npm ci && npm run dev`；`npm run build`执行vue-tsc与Vite。后端安装requirements并设置DATABASE_URL/REDIS_URL/JWT_SECRET后运行uvicorn。当前用ORM create_all建表，migrations提供初始结构说明，不声称生产版本迁移链。许可证MIT，见LICENSE。
 
-实际验收见批次 `test-artifacts/gb-0031/TESTING.md`，测试脚本、关键JSON、CSV、PNG、原始.log与源码分离。未做外部真实岩相准确率验证、生产压力或完整无障碍审计。令牌/IP分钟限流不是生产抗滥用全链路，重新登录可获得新令牌计数。Google字体断网时回退本地字体。任何复核方案仍需试验员结合图谱定义执行，不提供地质因果或现场风险保证。
+实际验收见批次 `test-artifacts/gb-0031/TESTING.md`，测试脚本、关键JSON、CSV、PNG、原始.log与源码分离。备选票分析的两个自检脚本在`backend/tests/`，可独立运行。未做外部真实岩相准确率验证、生产压力或完整无障碍审计。令牌/IP分钟限流不是生产抗滥用全链路，重新登录可获得新令牌计数。Google字体断网时回退本地字体。任何复核方案仍需试验员结合图谱定义执行，不提供地质因果或现场风险保证。

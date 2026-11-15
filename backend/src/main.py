@@ -11,7 +11,7 @@ from src.models import *
 from src.middlewares.request_id import RequestIDMiddleware
 from src.middlewares.errors import ErrorMiddleware
 from src.middlewares.rate_limit import RateLimitMiddleware
-from src.routes import auth,source,runs,memos,audit
+from src.routes import auth,source,runs,alternatives,memos,audit
 @asynccontextmanager
 async def lifespan(app):
  Base.metadata.create_all(engine)
@@ -25,7 +25,7 @@ app=FastAPI(title='杉序岩芯标记一致性簿',lifespan=lifespan)
 @app.exception_handler(RequestValidationError)
 async def invalid_input(request,error):return JSONResponse({'detail':[{'loc':e['loc'],'message':e['msg'],'type':e['type']} for e in error.errors()]},status_code=422)
 app.add_middleware(ErrorMiddleware);app.add_middleware(RateLimitMiddleware);app.add_middleware(RequestIDMiddleware)
-for route in (auth,source,runs,memos,audit):app.include_router(route.router)
+for route in (auth,source,runs,alternatives,memos,audit):app.include_router(route.router)
 @app.get('/health')
 def health():
  with engine.connect() as connection:connection.execute(text('select 1'))

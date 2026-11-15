@@ -2,7 +2,7 @@ from sqlalchemy import select
 from fastapi import HTTPException
 from src.models import AgreementStudy,Specimen,RaterVote
 from src.utils.serialize import row
-from .validation import validate_source
+from .validation import validate_source,validate_candidates
 from .audit import record
 
 def create_study(db,data,actor):
@@ -14,7 +14,7 @@ def create_study(db,data,actor):
  for s in data.specimens:
   item=Specimen(study_id=study.id,reference=s.reference,description=s.description);db.add(item);db.flush()
   for v in s.votes:db.add(RaterVote(specimen_id=item.id,**v.model_dump()))
- db.commit();record(db,actor,'study.imported',{'study_id':study.id,'specimens':len(items)});return row(study)
+ db.commit();record(db,actor,'study.imported',{'study_id':study.id,'specimens':len(items),'candidate_votes':sum(1 for v in votes if v.get('alternatives'))});return row(study)
 
 def source_data(db,id):
  study=db.get(AgreementStudy,id)
@@ -26,8 +26,14 @@ def edit_vote(db,id,data,actor):
  vote=db.get(RaterVote,id)
  if not vote:raise HTTPException(404,'票不存在')
  item=db.get(Specimen,vote.specimen_id);study=db.get(AgreementStudy,item.study_id)
- if data.category not in study.categories:raise HTTPException(422,'类别不在预先声明列表')
- old=vote.category;vote.category=data.category;db.commit();record(db,actor,'vote.revised',{'vote_id':id,'old':old,'new':vote.category});return row(vote)
+ patch=data.model_dump(exclude_unset=True)
+ if not patch:raise HTTPException(422,'未提供任何修改字段')
+ new_category=patch.get('category',vote.category);new_alternatives=patch.get('alternatives',vote.alternatives)
+ if new_category not in study.categories:raise HTTPException(422,'类别不在预先声明列表')
+ try:validate_candidates({'categories':study.categories},[{'category':new_category,'alternatives':new_alternatives}])
+ except ValueError as error:raise HTTPException(422,f'{error}；修改原票类别时须同步更新该票候选集合')
+ old={'category':vote.category,'alternatives':vote.alternatives}
+ vote.category=new_category;vote.alternatives=new_alternatives;db.commit();record(db,actor,'vote.revised',{'vote_id':id,'old_category':old['category'],'new_category':vote.category,'old_alternatives':old['alternatives'],'new_alternatives':vote.alternatives});return row(vote)
 
 def edit_item(db,id,data,actor):
  item=db.get(Specimen,id)

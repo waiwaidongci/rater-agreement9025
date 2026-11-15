@@ -5,7 +5,8 @@ from src.config.database import Base
 class ReviewMemo(Base):
  __tablename__='review_memos'
  id:Mapped[int]=mapped_column(primary_key=True)
- run_id:Mapped[int]=mapped_column(ForeignKey('agreement_runs.id'))
+ run_id:Mapped[int|None]=mapped_column(ForeignKey('agreement_runs.id'),nullable=True)
+ alternatives_run_id:Mapped[int|None]=mapped_column(ForeignKey('alternatives_runs.id'),nullable=True)
  name:Mapped[str]=mapped_column(String(180),unique=True)
  interpretation:Mapped[str]=mapped_column(Text)
  next_step:Mapped[str]=mapped_column(Text)
